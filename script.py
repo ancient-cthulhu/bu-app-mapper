@@ -11,7 +11,7 @@ from veracode_api_signing.plugin_requests import RequestsAuthPluginVeracodeHMAC
 API_HOST = "https://api.veracode.com"
 APPS_URL = f"{API_HOST}/appsec/v1/applications"
 BU_URL = f"{API_HOST}/api/authn/v2/business_units"
-PAGE_SIZE = 50
+PAGE_SIZE = 500
 DEFAULT_CSV = "dry_run_bu_assignments.csv"
 
 MAX_RETRIES = 3
@@ -77,25 +77,38 @@ def fetch_all_apps(session):
 
 def fetch_business_units(session):
     # fetch all BUs and map name -> guid
-    r = send_request(session, "GET", BU_URL)
-    try:
-        r.raise_for_status()
-    except requests.HTTPError:
-        print("[ERROR] failed to fetch business units")
-        print("status:", r.status_code)
-        print("body:", r.text)
-        raise
-
-    data = r.json()
-    bu_list = data.get("business_units") or data.get("_embedded", {}).get("business_units", [])
-
     result = {}
-    for bu in bu_list:
-        name = bu.get("bu_name")
-        href = bu.get("_links", {}).get("self", {}).get("href", "")
-        guid = href.rstrip("/").split("/")[-1]
-        if name and guid:
-            result[name] = guid
+    page = 0
+
+    while True:
+        r = send_request(
+            session,
+            "GET",
+            BU_URL,
+            params={"page": page, "size": PAGE_SIZE},
+        )
+        try:
+            r.raise_for_status()
+        except requests.HTTPError:
+            print("[ERROR] failed to fetch business units")
+            print("status:", r.status_code)
+            print("body:", r.text)
+            raise
+
+        data = r.json()
+        bu_list = data.get("business_units") or data.get("_embedded", {}).get("business_units", [])
+
+        if not bu_list:
+            break
+
+        for bu in bu_list:
+            name = bu.get("bu_name")
+            href = bu.get("_links", {}).get("self", {}).get("href", "")
+            guid = href.rstrip("/").split("/")[-1]
+            if name and guid:
+                result[name] = guid
+
+        page += 1
 
     return result
 
@@ -180,7 +193,7 @@ def process_apps(dry_run=False):
         profile = app.get("profile") or {}
         app_name = profile.get("name") or "<no-name>"
         app_guid = app.get("guid")
-        
+
         # base CSV row
         row = {
             "app_name": app_name,
@@ -241,7 +254,7 @@ def process_apps(dry_run=False):
             row["bu_action"] = bu_action
             row["app_action"] = app_action
             csv_rows.append(row)
-            
+
     # write full dry-run report after processing
     if dry_run:
         write_dry_run_csv(csv_rows)
